@@ -1,0 +1,18 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+pydantic
+pydantic-settings
+python-jose[cryptography]
+passlib[bcrypt]
+bcrypt<4.1  # Pin bcrypt for passlib compatibility
+python-multipart
+alembic
+pyotp
+cryptography
+slowapi
+email-validator
+msal
+requests
+psycopg2-binary  # PostgreSQL driver
+firebase-admin  # Firebase Admin SDK for push notifications
