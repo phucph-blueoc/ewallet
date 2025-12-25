@@ -3,6 +3,7 @@ Service for creating and sending notifications.
 """
 import json
 import logging
+import threading
 from typing import Optional
 from sqlalchemy.orm import Session
 from app.models import Notification, NotificationSettings
@@ -106,30 +107,36 @@ def create_transaction_notification(
         }
     )
     
-    # Send push notification via FCM
-    try:
-        # Get device token from notification settings
-        if settings and settings.device_token:
-            notification_data = {
-                "type": "TRANSACTION",
-                "transaction_type": transaction_type,
-                "amount": str(amount),
-                "notification_id": notification.id,
-            }
-            if note:
-                notification_data["note"] = note
-            
-            send_push_notification(
-                device_token=settings.device_token,
-                title=title,
-                body=message,
-                data=notification_data
-            )
-        else:
-            logger.debug(f"No device token found for user {user_id}, skipping push notification")
-    except Exception as e:
-        # Don't fail notification creation if push fails
-        logger.error(f"Failed to send push notification for user {user_id}: {e}")
+    # Send push notification via FCM in background (non-blocking)
+    # This prevents push notification delays from blocking the API response
+    if settings and settings.device_token:
+        notification_data = {
+            "type": "TRANSACTION",
+            "transaction_type": transaction_type,
+            "amount": str(amount),
+            "notification_id": notification.id,
+        }
+        if note:
+            notification_data["note"] = note
+        
+        # Send push notification in background thread to avoid blocking
+        def send_notification_background():
+            try:
+                send_push_notification(
+                    device_token=settings.device_token,
+                    title=title,
+                    body=message,
+                    data=notification_data
+                )
+            except Exception as e:
+                # Don't fail notification creation if push fails
+                logger.error(f"Failed to send push notification for user {user_id}: {e}")
+        
+        # Start background thread
+        thread = threading.Thread(target=send_notification_background, daemon=True)
+        thread.start()
+    else:
+        logger.debug(f"No device token found for user {user_id}, skipping push notification")
     
     return notification
 

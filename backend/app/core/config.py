@@ -35,8 +35,8 @@ class Settings(BaseSettings):
     MICROSOFT_MAIL_FROM: Optional[str] = None  # The email address to send from
     
     # OTP Settings
-    OTP_INTERVAL: int = 300  # 5 minutes in seconds
-    OTP_EXPIRY_MINUTES: int = 5
+    OTP_INTERVAL: int = 300  # 5 minutes in seconds (TOTP interval)
+    OTP_EXPIRY_MINUTES: int = 15  # 15 minutes expiry (increased from 5 to handle slow email delivery)
     
     # Transfer Settings
     LARGE_TRANSFER_THRESHOLD: float = 1000000.0  # Require OTP for transfers >= 1,000,000₫

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../providers/providers.dart';
-import '../../models/models.dart';
 import '../../widgets/tech_background.dart';
 import '../../widgets/tech_card.dart';
 import 'bill_check_screen.dart';
@@ -36,9 +35,7 @@ class _BillProviderListScreenState extends State<BillProviderListScreen> {
               onPressed: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(
-                    builder: (_) => const SavedBillsScreen(),
-                  ),
+                  MaterialPageRoute(builder: (_) => const SavedBillsScreen()),
                 );
               },
               tooltip: 'Hóa đơn đã lưu',
@@ -56,11 +53,7 @@ class _BillProviderListScreenState extends State<BillProviderListScreen> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(
-                      Icons.receipt_long,
-                      size: 60,
-                      color: Colors.grey[400],
-                    ),
+                    Icon(Icons.receipt_long, size: 60, color: Colors.grey[400]),
                     const SizedBox(height: 16),
                     Text(
                       'Không có nhà cung cấp nào',
@@ -77,9 +70,9 @@ class _BillProviderListScreenState extends State<BillProviderListScreen> {
                 Text(
                   'Chọn nhà cung cấp dịch vụ',
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
                 ),
                 const SizedBox(height: 16),
                 ...billProvider.providers.map((provider) {
@@ -155,4 +148,3 @@ class _BillProviderListScreenState extends State<BillProviderListScreen> {
     );
   }
 }
-

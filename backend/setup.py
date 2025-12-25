@@ -58,7 +58,7 @@ ENCRYPTION_KEY={encryption_key}
 
 # OTP Settings
 OTP_INTERVAL=300
-OTP_EXPIRY_MINUTES=5
+OTP_EXPIRY_MINUTES=15  # Increased from 5 to handle slow email delivery
 
 # Rate Limiting
 RATE_LIMIT_ENABLED=true

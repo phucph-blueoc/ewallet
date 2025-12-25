@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../providers/providers.dart';
 import '../services/api_service.dart';
 
@@ -12,7 +13,72 @@ import '../services/api_service.dart';
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   debugPrint('Handling background message: ${message.messageId}');
-  // Handle background message here
+  debugPrint('Title: ${message.notification?.title}');
+  debugPrint('Body: ${message.notification?.body}');
+  
+  // Initialize Firebase for background handler
+  await Firebase.initializeApp();
+  
+  // Initialize local notifications for background handler
+  const AndroidInitializationSettings initializationSettingsAndroid =
+      AndroidInitializationSettings('@mipmap/ic_launcher');
+  const DarwinInitializationSettings initializationSettingsIOS =
+      DarwinInitializationSettings();
+  const InitializationSettings initializationSettings = InitializationSettings(
+    android: initializationSettingsAndroid,
+    iOS: initializationSettingsIOS,
+  );
+  
+  final FlutterLocalNotificationsPlugin localNotifications = 
+      FlutterLocalNotificationsPlugin();
+  await localNotifications.initialize(initializationSettings);
+  
+  // Create notification channel for Android (must be done before showing notification)
+  if (Platform.isAndroid) {
+    const AndroidNotificationChannel channel = AndroidNotificationChannel(
+      'ewallet_notifications',
+      'E-Wallet Notifications',
+      description: 'Notifications for transactions and alerts',
+      importance: Importance.high,
+      playSound: true,
+      enableVibration: true,
+    );
+    
+    final AndroidFlutterLocalNotificationsPlugin? androidImplementation =
+        localNotifications.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+    await androidImplementation?.createNotificationChannel(channel);
+  }
+  
+  // Show notification
+  const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+    'ewallet_notifications',
+    'E-Wallet Notifications',
+    channelDescription: 'Notifications for transactions and alerts',
+    importance: Importance.high,
+    priority: Priority.high,
+    showWhen: true,
+    playSound: true,
+    enableVibration: true,
+  );
+  
+  const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
+    presentAlert: true,
+    presentBadge: true,
+    presentSound: true,
+  );
+  
+  const NotificationDetails notificationDetails = NotificationDetails(
+    android: androidDetails,
+    iOS: iosDetails,
+  );
+  
+  await localNotifications.show(
+    DateTime.now().millisecondsSinceEpoch.remainder(100000),
+    message.notification?.title ?? 'E-Wallet',
+    message.notification?.body ?? '',
+    notificationDetails,
+  );
 }
 
 class FCMService {
@@ -22,6 +88,7 @@ class FCMService {
 
   FirebaseMessaging? _firebaseMessaging;
   final ApiService _apiService = ApiService();
+  final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
 
   String? _fcmToken;
   bool _initialized = false;
@@ -64,7 +131,10 @@ class FCMService {
         return;
       }
 
-      // Request permission for iOS
+      // Initialize local notifications
+      await _initializeLocalNotifications();
+
+      // Request notification permissions
       if (Platform.isIOS) {
         NotificationSettings settings = await _firebaseMessaging!
             .requestPermission(
@@ -80,14 +150,40 @@ class FCMService {
           );
           return;
         }
+      } else if (Platform.isAndroid) {
+        // Request notification permission for Android 13+
+        final AndroidFlutterLocalNotificationsPlugin? androidImplementation =
+            _localNotifications.resolvePlatformSpecificImplementation<
+                AndroidFlutterLocalNotificationsPlugin>();
+        if (androidImplementation != null) {
+          final bool? granted = await androidImplementation.requestNotificationsPermission();
+          debugPrint('Android notification permission granted: $granted');
+        }
       }
 
       // Set up background message handler
       FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
       // Get FCM token
-      _fcmToken = await _firebaseMessaging!.getToken();
-      debugPrint('FCM Token: $_fcmToken');
+      try {
+        _fcmToken = await _firebaseMessaging!.getToken();
+        debugPrint('FCM Token: $_fcmToken');
+        
+        if (_fcmToken == null) {
+          debugPrint('⚠️ WARNING: FCM token is null. This usually means:');
+          debugPrint('   1. Android emulator without Google Play Services');
+          debugPrint('   2. Firebase not properly configured');
+          debugPrint('   3. Network connectivity issues');
+          debugPrint('   Solution: Use an emulator with Google Play Services or test on a physical device');
+        }
+      } catch (e) {
+        debugPrint('❌ ERROR: Failed to get FCM token: $e');
+        debugPrint('   This is common on Android emulators without Google Play Services.');
+        debugPrint('   To test notifications:');
+        debugPrint('   - Use an emulator with Google APIs (includes Play Services)');
+        debugPrint('   - Or test on a physical Android device');
+        return; // Exit if we can't get token
+      }
 
       if (_fcmToken != null) {
         // Save token locally
@@ -123,12 +219,16 @@ class FCMService {
       });
 
       // Handle foreground messages
-      FirebaseMessaging.onMessage.listen((message) {
+      FirebaseMessaging.onMessage.listen((message) async {
         if (context != null && context.mounted) {
-          _handleForegroundMessage(message, context);
+          await _handleForegroundMessage(message, context);
         } else {
-          // If context is not available, just log the message
-          debugPrint('Received foreground message but context not available');
+          // Still show notification even without context
+          await _showNotification(
+            title: message.notification?.title ?? 'E-Wallet',
+            body: message.notification?.body ?? '',
+            data: message.data,
+          );
         }
       });
 
@@ -153,6 +253,49 @@ class FCMService {
     }
   }
 
+  /// Initialize local notifications
+  Future<void> _initializeLocalNotifications() async {
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    
+    const DarwinInitializationSettings initializationSettingsIOS =
+        DarwinInitializationSettings(
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
+    );
+
+    const InitializationSettings initializationSettings = InitializationSettings(
+      android: initializationSettingsAndroid,
+      iOS: initializationSettingsIOS,
+    );
+
+    await _localNotifications.initialize(
+      initializationSettings,
+      onDidReceiveNotificationResponse: (NotificationResponse response) {
+        debugPrint('Notification tapped: ${response.payload}');
+        // Handle notification tap if needed
+      },
+    );
+
+    // Create notification channel for Android
+    if (Platform.isAndroid) {
+      const AndroidNotificationChannel channel = AndroidNotificationChannel(
+        'ewallet_notifications', // id
+        'E-Wallet Notifications', // name
+        description: 'Notifications for transactions and alerts',
+        importance: Importance.high,
+        playSound: true,
+        enableVibration: true,
+      );
+
+      final AndroidFlutterLocalNotificationsPlugin? androidImplementation =
+          _localNotifications.resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
+      await androidImplementation?.createNotificationChannel(channel);
+    }
+  }
+
   /// Register FCM token with backend
   Future<void> _registerTokenWithBackend(String token) async {
     try {
@@ -168,11 +311,18 @@ class FCMService {
   }
 
   /// Handle foreground messages
-  void _handleForegroundMessage(RemoteMessage message, BuildContext? context) {
+  Future<void> _handleForegroundMessage(RemoteMessage message, BuildContext? context) async {
     debugPrint('Received foreground message: ${message.messageId}');
     debugPrint('Title: ${message.notification?.title}');
     debugPrint('Body: ${message.notification?.body}');
     debugPrint('Data: ${message.data}');
+
+    // Display notification
+    await _showNotification(
+      title: message.notification?.title ?? 'E-Wallet',
+      body: message.notification?.body ?? '',
+      data: message.data,
+    );
 
     // Refresh notifications count when receiving a notification
     if (context != null) {
@@ -186,9 +336,51 @@ class FCMService {
         debugPrint('Error refreshing notification count: $e');
       }
     }
+  }
 
-    // Show in-app notification or snackbar
-    // For now, we'll just log it. You can add flutter_local_notifications for better UX
+  /// Show local notification
+  Future<void> _showNotification({
+    required String title,
+    required String body,
+    Map<String, dynamic>? data,
+  }) async {
+    try {
+      debugPrint('Attempting to show notification: $title - $body');
+      
+      const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+        'ewallet_notifications',
+        'E-Wallet Notifications',
+        channelDescription: 'Notifications for transactions and alerts',
+        importance: Importance.high,
+        priority: Priority.high,
+        showWhen: true,
+        playSound: true,
+        enableVibration: true,
+      );
+
+      const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+      );
+
+      const NotificationDetails notificationDetails = NotificationDetails(
+        android: androidDetails,
+        iOS: iosDetails,
+      );
+
+      await _localNotifications.show(
+        DateTime.now().millisecondsSinceEpoch.remainder(100000),
+        title,
+        body,
+        notificationDetails,
+        payload: data != null ? data.toString() : null,
+      );
+      
+      debugPrint('Notification shown successfully');
+    } catch (e) {
+      debugPrint('Error showing notification: $e');
+    }
   }
 
   /// Handle notification tap
