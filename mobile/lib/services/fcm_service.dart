@@ -8,13 +8,14 @@ import 'package:provider/provider.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../providers/providers.dart';
 import '../services/api_service.dart';
+import '../utils/logger.dart';
 
 /// Top-level function to handle background messages
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  debugPrint('Handling background message: ${message.messageId}');
-  debugPrint('Title: ${message.notification?.title}');
-  debugPrint('Body: ${message.notification?.body}');
+  Logger.debug('Handling background message: ${message.messageId}');
+  Logger.debug('Title: ${message.notification?.title}');
+  Logger.debug('Body: ${message.notification?.body}');
   
   // Initialize Firebase for background handler
   await Firebase.initializeApp();
@@ -105,15 +106,13 @@ class FCMService {
       try {
         Firebase.app(); // This will throw if Firebase is not initialized
       } catch (e) {
-        debugPrint('Firebase not initialized. Attempting to initialize...');
+        Logger.warning('Firebase not initialized. Attempting to initialize...');
         try {
           await Firebase.initializeApp();
-          debugPrint('Firebase initialized successfully in FCM service');
+          Logger.info('Firebase initialized successfully in FCM service');
         } catch (initError) {
-          debugPrint('Failed to initialize Firebase: $initError');
-          debugPrint(
-            'FCM will not be available. App can continue without push notifications.',
-          );
+          Logger.error('Failed to initialize Firebase', error: initError);
+          Logger.warning('FCM will not be available. App can continue without push notifications.');
           return; // Exit early if Firebase can't be initialized
         }
       }
@@ -122,12 +121,12 @@ class FCMService {
       try {
         _firebaseMessaging = FirebaseMessaging.instance;
       } catch (e) {
-        debugPrint('Failed to get FirebaseMessaging instance: $e');
+        Logger.error('Failed to get FirebaseMessaging instance', error: e);
         return;
       }
 
       if (_firebaseMessaging == null) {
-        debugPrint('FirebaseMessaging is null. FCM unavailable.');
+        Logger.warning('FirebaseMessaging is null. FCM unavailable.');
         return;
       }
 
@@ -145,9 +144,7 @@ class FCMService {
             );
 
         if (settings.authorizationStatus != AuthorizationStatus.authorized) {
-          debugPrint(
-            'User declined or has not accepted notification permissions',
-          );
+          Logger.warning('User declined or has not accepted notification permissions');
           return;
         }
       } else if (Platform.isAndroid) {
@@ -157,7 +154,7 @@ class FCMService {
                 AndroidFlutterLocalNotificationsPlugin>();
         if (androidImplementation != null) {
           final bool? granted = await androidImplementation.requestNotificationsPermission();
-          debugPrint('Android notification permission granted: $granted');
+          Logger.debug('Android notification permission granted: $granted');
         }
       }
 
@@ -167,21 +164,21 @@ class FCMService {
       // Get FCM token
       try {
         _fcmToken = await _firebaseMessaging!.getToken();
-        debugPrint('FCM Token: $_fcmToken');
+        Logger.sensitive('FCM Token: $_fcmToken');
         
         if (_fcmToken == null) {
-          debugPrint('⚠️ WARNING: FCM token is null. This usually means:');
-          debugPrint('   1. Android emulator without Google Play Services');
-          debugPrint('   2. Firebase not properly configured');
-          debugPrint('   3. Network connectivity issues');
-          debugPrint('   Solution: Use an emulator with Google Play Services or test on a physical device');
+          Logger.warning('FCM token is null. This usually means:');
+          Logger.warning('   1. Android emulator without Google Play Services');
+          Logger.warning('   2. Firebase not properly configured');
+          Logger.warning('   3. Network connectivity issues');
+          Logger.warning('   Solution: Use an emulator with Google Play Services or test on a physical device');
         }
       } catch (e) {
-        debugPrint('❌ ERROR: Failed to get FCM token: $e');
-        debugPrint('   This is common on Android emulators without Google Play Services.');
-        debugPrint('   To test notifications:');
-        debugPrint('   - Use an emulator with Google APIs (includes Play Services)');
-        debugPrint('   - Or test on a physical Android device');
+        Logger.error('Failed to get FCM token', error: e);
+        Logger.warning('This is common on Android emulators without Google Play Services.');
+        Logger.warning('To test notifications:');
+        Logger.warning('   - Use an emulator with Google APIs (includes Play Services)');
+        Logger.warning('   - Or test on a physical Android device');
         return; // Exit if we can't get token
       }
 
@@ -206,14 +203,14 @@ class FCMService {
             await _registerTokenWithBackend(_fcmToken!);
           }
         } catch (e) {
-          debugPrint('Failed to register token on initialization: $e');
+          Logger.warning('Failed to register token on initialization', error: e);
           // Token will be registered later when user logs in or when token refresh happens
         }
       }
 
       // Listen for token refresh
       _firebaseMessaging!.onTokenRefresh.listen((newToken) {
-        debugPrint('FCM Token refreshed: $newToken');
+        Logger.debug('FCM Token refreshed: $newToken');
         _fcmToken = newToken;
         _registerTokenWithBackend(newToken);
       });
@@ -247,9 +244,9 @@ class FCMService {
       }
 
       _initialized = true;
-      debugPrint('FCM Service initialized successfully');
+      Logger.info('FCM Service initialized successfully');
     } catch (e) {
-      debugPrint('Error initializing FCM: $e');
+      Logger.error('Error initializing FCM', error: e);
     }
   }
 
@@ -273,7 +270,7 @@ class FCMService {
     await _localNotifications.initialize(
       initializationSettings,
       onDidReceiveNotificationResponse: (NotificationResponse response) {
-        debugPrint('Notification tapped: ${response.payload}');
+        Logger.debug('Notification tapped: ${response.payload}');
         // Handle notification tap if needed
       },
     );
@@ -304,18 +301,18 @@ class FCMService {
         deviceToken: token,
         deviceType: deviceType,
       );
-      debugPrint('FCM token registered with backend');
+      Logger.info('FCM token registered with backend');
     } catch (e) {
-      debugPrint('Error registering FCM token: $e');
+      Logger.error('Error registering FCM token', error: e);
     }
   }
 
   /// Handle foreground messages
   Future<void> _handleForegroundMessage(RemoteMessage message, BuildContext? context) async {
-    debugPrint('Received foreground message: ${message.messageId}');
-    debugPrint('Title: ${message.notification?.title}');
-    debugPrint('Body: ${message.notification?.body}');
-    debugPrint('Data: ${message.data}');
+    Logger.debug('Received foreground message: ${message.messageId}');
+    Logger.debug('Title: ${message.notification?.title}');
+    Logger.debug('Body: ${message.notification?.body}');
+    Logger.debug('Data: ${message.data}');
 
     // Display notification
     await _showNotification(
@@ -333,7 +330,7 @@ class FCMService {
         );
         notificationProvider.refreshUnreadCount();
       } catch (e) {
-        debugPrint('Error refreshing notification count: $e');
+        Logger.error('Error refreshing notification count', error: e);
       }
     }
   }
@@ -345,7 +342,7 @@ class FCMService {
     Map<String, dynamic>? data,
   }) async {
     try {
-      debugPrint('Attempting to show notification: $title - $body');
+      Logger.debug('Attempting to show notification: $title - $body');
       
       const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
         'ewallet_notifications',
@@ -377,16 +374,16 @@ class FCMService {
         payload: data != null ? data.toString() : null,
       );
       
-      debugPrint('Notification shown successfully');
+      Logger.debug('Notification shown successfully');
     } catch (e) {
-      debugPrint('Error showing notification: $e');
+      Logger.error('Error showing notification', error: e);
     }
   }
 
   /// Handle notification tap
   void _handleNotificationTap(RemoteMessage message, {BuildContext? context}) {
-    debugPrint('Notification tapped: ${message.messageId}');
-    debugPrint('Data: ${message.data}');
+    Logger.debug('Notification tapped: ${message.messageId}');
+    Logger.debug('Data: ${message.data}');
 
     // Navigate based on notification data
     if (context != null) {
@@ -401,13 +398,13 @@ class FCMService {
         notificationProvider.loadNotifications();
         notificationProvider.refreshUnreadCount();
       } catch (e) {
-        debugPrint('Error refreshing notifications: $e');
+        Logger.error('Error refreshing notifications', error: e);
       }
 
       // Navigate based on notification type
       // Note: Navigation will be handled by the app's navigation structure
       // You can implement custom navigation logic here based on your needs
-      debugPrint('Notification type: ${data['type']}');
+      Logger.debug('Notification type: ${data['type']}');
     }
   }
 
@@ -423,9 +420,9 @@ class FCMService {
     if (_firebaseMessaging == null) return;
     try {
       await _firebaseMessaging!.subscribeToTopic(topic);
-      debugPrint('Subscribed to topic: $topic');
+      Logger.info('Subscribed to topic: $topic');
     } catch (e) {
-      debugPrint('Error subscribing to topic: $e');
+      Logger.error('Error subscribing to topic', error: e);
     }
   }
 
@@ -434,9 +431,9 @@ class FCMService {
     if (_firebaseMessaging == null) return;
     try {
       await _firebaseMessaging!.unsubscribeFromTopic(topic);
-      debugPrint('Unsubscribed from topic: $topic');
+      Logger.info('Unsubscribed from topic: $topic');
     } catch (e) {
-      debugPrint('Error unsubscribing from topic: $e');
+      Logger.error('Error unsubscribing from topic', error: e);
     }
   }
 
@@ -448,9 +445,9 @@ class FCMService {
       _fcmToken = null;
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('fcm_token');
-      debugPrint('FCM token deleted');
+      Logger.info('FCM token deleted');
     } catch (e) {
-      debugPrint('Error deleting FCM token: $e');
+      Logger.error('Error deleting FCM token', error: e);
     }
   }
 }

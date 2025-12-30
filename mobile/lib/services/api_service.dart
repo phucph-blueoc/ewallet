@@ -1,15 +1,25 @@
-import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../models/models.dart';
 import '../utils/auth_exception.dart';
 import '../utils/navigation_helper.dart';
+import 'certificate_pinning_service.dart';
 
 // Import Contact and ContactStats
 import '../utils/constants.dart';
 
 class ApiService {
   final _storage = const FlutterSecureStorage();
+  late final Dio _dio;
+
+  ApiService() {
+    // Initialize Dio with certificate pinning
+    _dio = CertificatePinningService.createPinnedDio();
+    _dio.options.baseUrl = baseUrl;
+    _dio.options.connectTimeout = const Duration(seconds: 10);
+    _dio.options.receiveTimeout = const Duration(seconds: 10);
+    _dio.options.headers['Content-Type'] = 'application/json';
+  }
 
   // Auth Methods
   Future<Map<String, dynamic>> register({
@@ -17,21 +27,20 @@ class ApiService {
     required String password,
     required String fullName,
   }) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/auth/register'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'email': email,
-        'password': password,
-        'full_name': fullName,
-      }),
-    );
+    try {
+      final response = await _dio.post(
+        '/auth/register',
+        data: {'email': email, 'password': password, 'full_name': fullName},
+      );
 
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Registration failed');
+      if (response.statusCode == 200) {
+        return response.data as Map<String, dynamic>;
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Registration failed');
+      }
+    } on DioException catch (e) {
+      throw _handleDioError(e);
     }
   }
 
@@ -39,28 +48,34 @@ class ApiService {
     required String email,
     required String otpCode,
   }) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/auth/verify-otp'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'email': email, 'otp_code': otpCode}),
-    );
+    try {
+      final response = await _dio.post(
+        '/auth/verify-otp',
+        data: {'email': email, 'otp_code': otpCode},
+      );
 
-    if (response.statusCode != 200) {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'OTP verification failed');
+      if (response.statusCode != 200) {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'OTP verification failed');
+      }
+    } on DioException catch (e) {
+      throw _handleDioError(e);
     }
   }
 
   Future<void> resendOtp(String email) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/auth/resend-otp'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'email': email}),
-    );
+    try {
+      final response = await _dio.post(
+        '/auth/resend-otp',
+        data: {'email': email},
+      );
 
-    if (response.statusCode != 200) {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to resend OTP');
+      if (response.statusCode != 200) {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to resend OTP');
+      }
+    } on DioException catch (e) {
+      throw _handleDioError(e);
     }
   }
 
@@ -68,21 +83,28 @@ class ApiService {
     required String currentPassword,
     required String newPassword,
   }) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/auth/change-password'),
-      headers: headers,
-      body: jsonEncode({
-        'current_password': currentPassword,
-        'new_password': newPassword,
-      }),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/auth/change-password',
+        data: {
+          'current_password': currentPassword,
+          'new_password': newPassword,
+        },
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode != 200) {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to change password');
+      if (response.statusCode != 200) {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to change password');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -90,21 +112,30 @@ class ApiService {
     required String email,
     required String password,
   }) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/auth/login'),
-      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-      body: {'username': email, 'password': password},
-    );
+    try {
+      final response = await _dio.post(
+        '/auth/login',
+        data: {'username': email, 'password': password},
+        options: Options(
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        ),
+      );
 
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      // Save tokens
-      await _storage.write(key: 'access_token', value: data['access_token']);
-      await _storage.write(key: 'refresh_token', value: data['refresh_token']);
-      return data;
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Login failed');
+      if (response.statusCode == 200) {
+        final data = response.data as Map<String, dynamic>;
+        // Save tokens
+        await _storage.write(key: 'access_token', value: data['access_token']);
+        await _storage.write(
+          key: 'refresh_token',
+          value: data['refresh_token'],
+        );
+        return data;
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Login failed');
+      }
+    } on DioException catch (e) {
+      throw _handleDioError(e);
     }
   }
 
@@ -117,18 +148,21 @@ class ApiService {
     return await _storage.read(key: 'access_token');
   }
 
-  Future<Map<String, String>> _getHeaders() async {
+  Future<Options> _getOptions({Map<String, dynamic>? extraHeaders}) async {
     final token = await getAccessToken();
-    return {
-      'Content-Type': 'application/json',
-      if (token != null) 'Authorization': 'Bearer $token',
-    };
+    return Options(
+      headers: {
+        'Content-Type': 'application/json',
+        if (token != null) 'Authorization': 'Bearer $token',
+        if (extraHeaders != null) ...extraHeaders,
+      },
+    );
   }
 
   /// Check response status and handle 401 Unauthorized
   /// Throws UnauthorizedException if status is 401
   /// Automatically logs out and navigates to login screen
-  Future<void> _handleResponse(http.Response response) async {
+  Future<void> _handleResponse(Response response) async {
     if (response.statusCode == 401) {
       // Clear tokens on 401
       await logout();
@@ -138,10 +172,49 @@ class ApiService {
     }
   }
 
+  /// Handle Dio errors and convert to appropriate exceptions
+  Exception _handleDioError(DioException error) {
+    if (error.response != null) {
+      // Server responded with error status
+      final statusCode = error.response!.statusCode;
+      final errorData = error.response!.data;
+
+      String errorMessage = 'Request failed';
+      if (errorData is Map && errorData.containsKey('detail')) {
+        errorMessage = errorData['detail'].toString();
+      } else if (errorData is String) {
+        errorMessage = errorData;
+      } else {
+        errorMessage =
+            'HTTP $statusCode: ${error.response?.statusMessage ?? 'Unknown error'}';
+      }
+
+      if (statusCode == 403) {
+        errorMessage = 'Không có quyền truy cập.';
+      } else if (statusCode == 404) {
+        errorMessage = 'Resource not found.';
+      } else if (statusCode != null && statusCode >= 500) {
+        errorMessage = 'Server error. Please try again later.';
+      }
+
+      return Exception(errorMessage);
+    } else if (error.type == DioExceptionType.connectionTimeout ||
+        error.type == DioExceptionType.receiveTimeout) {
+      return Exception(
+        'Request timeout. Please check if the backend server is running at $baseUrl',
+      );
+    } else if (error.type == DioExceptionType.connectionError) {
+      return Exception(
+        'Network error: Unable to connect to server at $baseUrl. Please check if the backend is running.',
+      );
+    } else {
+      return Exception('Unexpected error: ${error.message}');
+    }
+  }
+
   // Wallet Methods
   Future<Wallet> getWallet() async {
     try {
-      final headers = await _getHeaders();
       final token = await getAccessToken();
 
       // Check if token exists
@@ -149,65 +222,24 @@ class ApiService {
         throw Exception('No authentication token found. Please login again.');
       }
 
-      final response = await http
-          .get(Uri.parse('$baseUrl/wallets/me'), headers: headers)
-          .timeout(
-            const Duration(seconds: 10),
-            onTimeout: () {
-              throw Exception(
-                'Request timeout. Please check if the backend server is running at $baseUrl',
-              );
-            },
-          );
+      final options = await _getOptions();
+      final response = await _dio.get('/wallets/me', options: options);
 
       if (response.statusCode == 200) {
         try {
-          return Wallet.fromJson(jsonDecode(response.body));
+          return Wallet.fromJson(response.data as Map<String, dynamic>);
         } catch (e) {
           throw Exception('Failed to parse wallet data: $e');
         }
       } else {
-        // Parse error message from response
-        String errorMessage = 'Failed to fetch wallet';
-        try {
-          if (response.body.isNotEmpty) {
-            final errorBody = jsonDecode(response.body);
-            if (errorBody is Map && errorBody.containsKey('detail')) {
-              errorMessage = errorBody['detail'].toString();
-            } else {
-              errorMessage =
-                  'HTTP ${response.statusCode}: ${response.reasonPhrase ?? 'Unknown error'}';
-            }
-          } else {
-            errorMessage =
-                'HTTP ${response.statusCode}: ${response.reasonPhrase ?? 'Unknown error'}';
-          }
-        } catch (e) {
-          // If parsing fails, use status code
-          errorMessage =
-              'HTTP ${response.statusCode}: ${response.reasonPhrase ?? 'Unknown error'}';
-          if (response.body.isNotEmpty) {
-            errorMessage += '\nResponse: ${response.body}';
-          }
-        }
-
-        // Check for authentication errors
         await _handleResponse(response);
-
-        if (response.statusCode == 403) {
-          errorMessage = 'Không có quyền truy cập.';
-        } else if (response.statusCode == 404) {
-          errorMessage = 'Wallet not found. Please contact support.';
-        } else if (response.statusCode >= 500) {
-          errorMessage = 'Server error. Please try again later.';
-        }
-
-        throw Exception(errorMessage);
+        throw Exception('Failed to fetch wallet');
       }
-    } on http.ClientException catch (e) {
-      throw Exception(
-        'Network error: Unable to connect to server at $baseUrl. Please check if the backend is running.\nError: ${e.message}',
-      );
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     } on FormatException catch (e) {
       throw Exception('Invalid response format: $e');
     } catch (e) {
@@ -225,7 +257,6 @@ class ApiService {
     String? transactionPin,
   }) async {
     try {
-      final headers = await _getHeaders();
       final token = await getAccessToken();
 
       // Check if token exists
@@ -245,68 +276,28 @@ class ApiService {
         if (transactionPin != null) 'transaction_pin': transactionPin,
       };
 
-      final response = await http
-          .post(
-            Uri.parse('$baseUrl/wallets/deposit'),
-            headers: headers,
-            body: jsonEncode(body),
-          )
-          .timeout(
-            const Duration(seconds: 10),
-            onTimeout: () {
-              throw Exception(
-                'Request timeout. Please check if the backend server is running at $baseUrl',
-              );
-            },
-          );
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/wallets/deposit',
+        data: body,
+        options: options,
+      );
 
       if (response.statusCode == 200) {
         try {
-          return Wallet.fromJson(jsonDecode(response.body));
+          return Wallet.fromJson(response.data as Map<String, dynamic>);
         } catch (e) {
           throw Exception('Failed to parse wallet data: $e');
         }
       } else {
-        // Parse error message from response
-        String errorMessage = 'Deposit failed';
-        try {
-          if (response.body.isNotEmpty) {
-            final errorBody = jsonDecode(response.body);
-            if (errorBody is Map && errorBody.containsKey('detail')) {
-              errorMessage = errorBody['detail'].toString();
-            } else {
-              errorMessage =
-                  'HTTP ${response.statusCode}: ${response.reasonPhrase ?? 'Unknown error'}';
-            }
-          } else {
-            errorMessage =
-                'HTTP ${response.statusCode}: ${response.reasonPhrase ?? 'Unknown error'}';
-          }
-        } catch (e) {
-          errorMessage =
-              'HTTP ${response.statusCode}: ${response.reasonPhrase ?? 'Unknown error'}';
-          if (response.body.isNotEmpty) {
-            errorMessage += '\nResponse: ${response.body}';
-          }
-        }
-
-        // Check for authentication errors
         await _handleResponse(response);
-
-        if (response.statusCode == 403) {
-          errorMessage = 'Không có quyền truy cập.';
-        } else if (response.statusCode == 400) {
-          // Keep the detailed error message from server
-        } else if (response.statusCode >= 500) {
-          errorMessage = 'Server error. Please try again later.';
-        }
-
-        throw Exception(errorMessage);
+        throw Exception('Deposit failed');
       }
-    } on http.ClientException catch (e) {
-      throw Exception(
-        'Network error: Unable to connect to server at $baseUrl. Please check if the backend is running.\nError: ${e.message}',
-      );
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     } on FormatException catch (e) {
       throw Exception('Invalid response format: $e');
     } catch (e) {
@@ -324,7 +315,6 @@ class ApiService {
     String? transactionPin,
   }) async {
     try {
-      final headers = await _getHeaders();
       final token = await getAccessToken();
 
       // Check if token exists
@@ -344,68 +334,28 @@ class ApiService {
         if (transactionPin != null) 'transaction_pin': transactionPin,
       };
 
-      final response = await http
-          .post(
-            Uri.parse('$baseUrl/wallets/withdraw'),
-            headers: headers,
-            body: jsonEncode(body),
-          )
-          .timeout(
-            const Duration(seconds: 10),
-            onTimeout: () {
-              throw Exception(
-                'Request timeout. Please check if the backend server is running at $baseUrl',
-              );
-            },
-          );
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/wallets/withdraw',
+        data: body,
+        options: options,
+      );
 
       if (response.statusCode == 200) {
         try {
-          return Wallet.fromJson(jsonDecode(response.body));
+          return Wallet.fromJson(response.data as Map<String, dynamic>);
         } catch (e) {
           throw Exception('Failed to parse wallet data: $e');
         }
       } else {
-        // Parse error message from response
-        String errorMessage = 'Withdrawal failed';
-        try {
-          if (response.body.isNotEmpty) {
-            final errorBody = jsonDecode(response.body);
-            if (errorBody is Map && errorBody.containsKey('detail')) {
-              errorMessage = errorBody['detail'].toString();
-            } else {
-              errorMessage =
-                  'HTTP ${response.statusCode}: ${response.reasonPhrase ?? 'Unknown error'}';
-            }
-          } else {
-            errorMessage =
-                'HTTP ${response.statusCode}: ${response.reasonPhrase ?? 'Unknown error'}';
-          }
-        } catch (e) {
-          errorMessage =
-              'HTTP ${response.statusCode}: ${response.reasonPhrase ?? 'Unknown error'}';
-          if (response.body.isNotEmpty) {
-            errorMessage += '\nResponse: ${response.body}';
-          }
-        }
-
-        // Check for authentication errors
         await _handleResponse(response);
-
-        if (response.statusCode == 403) {
-          errorMessage = 'Không có quyền truy cập.';
-        } else if (response.statusCode == 400) {
-          // Keep the detailed error message from server (e.g., "Insufficient funds")
-        } else if (response.statusCode >= 500) {
-          errorMessage = 'Server error. Please try again later.';
-        }
-
-        throw Exception(errorMessage);
+        throw Exception('Withdrawal failed');
       }
-    } on http.ClientException catch (e) {
-      throw Exception(
-        'Network error: Unable to connect to server at $baseUrl. Please check if the backend is running.\nError: ${e.message}',
-      );
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     } on FormatException catch (e) {
       throw Exception('Invalid response format: $e');
     } catch (e) {
@@ -421,24 +371,31 @@ class ApiService {
     required double amount,
     required String transactionPin,
   }) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/wallets/transfer/request-otp'),
-      headers: headers,
-      body: jsonEncode({
-        'receiver_email': receiverEmail,
-        'amount': amount,
-        'transaction_pin': transactionPin,
-      }),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/wallets/transfer/request-otp',
+        data: {
+          'receiver_email': receiverEmail,
+          'amount': amount,
+          'transaction_pin': transactionPin,
+        },
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to request OTP');
+      if (response.statusCode == 200) {
+        return response.data as Map<String, dynamic>;
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to request OTP');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -449,26 +406,33 @@ class ApiService {
     required String otpCode,
     String? note,
   }) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/wallets/transfer'),
-      headers: headers,
-      body: jsonEncode({
-        'receiver_email': receiverEmail,
-        'amount': amount,
-        'transaction_pin': transactionPin,
-        'otp_code': otpCode,
-        if (note != null) 'note': note,
-      }),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/wallets/transfer',
+        data: {
+          'receiver_email': receiverEmail,
+          'amount': amount,
+          'transaction_pin': transactionPin,
+          'otp_code': otpCode,
+          if (note != null) 'note': note,
+        },
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return Transaction.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Transfer failed');
+      if (response.statusCode == 200) {
+        return Transaction.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Transfer failed');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -476,54 +440,77 @@ class ApiService {
     required String currentPassword,
     required String transactionPin,
   }) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/auth/transaction-pin/set'),
-      headers: headers,
-      body: jsonEncode({
-        'current_password': currentPassword,
-        'transaction_pin': transactionPin,
-      }),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/auth/transaction-pin/set',
+        data: {
+          'current_password': currentPassword,
+          'transaction_pin': transactionPin,
+        },
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode != 200) {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to set PIN');
+      if (response.statusCode != 200) {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to set PIN');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<void> verifyTransactionPin(String transactionPin) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/auth/transaction-pin/verify'),
-      headers: headers,
-      body: jsonEncode({'transaction_pin': transactionPin}),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/auth/transaction-pin/verify',
+        data: {'transaction_pin': transactionPin},
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode != 200) {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Invalid transaction PIN');
+      if (response.statusCode != 200) {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Invalid transaction PIN');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<List<Transaction>> getTransactions() async {
-    final headers = await _getHeaders();
-    final response = await http.get(
-      Uri.parse('$baseUrl/wallets/transactions'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get(
+        '/wallets/transactions',
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      final List<dynamic> data = jsonDecode(response.body);
-      return data.map((json) => Transaction.fromJson(json)).toList();
-    } else {
-      throw Exception('Failed to fetch transactions');
+      if (response.statusCode == 200) {
+        final List<dynamic> data = response.data as List<dynamic>;
+        return data
+            .map((json) => Transaction.fromJson(json as Map<String, dynamic>))
+            .toList();
+      } else {
+        throw Exception('Failed to fetch transactions');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -535,61 +522,84 @@ class ApiService {
     String? avatarUrl,
     String? notes,
   }) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/contacts'),
-      headers: headers,
-      body: jsonEncode({
-        'name': name,
-        'email': email,
-        if (phone != null) 'phone': phone,
-        if (avatarUrl != null) 'avatar_url': avatarUrl,
-        if (notes != null) 'notes': notes,
-      }),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/contacts',
+        data: {
+          'name': name,
+          'email': email,
+          if (phone != null) 'phone': phone,
+          if (avatarUrl != null) 'avatar_url': avatarUrl,
+          if (notes != null) 'notes': notes,
+        },
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 201) {
-      return Contact.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to create contact');
+      if (response.statusCode == 201) {
+        return Contact.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to create contact');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<List<Contact>> getContacts({String? search}) async {
-    final headers = await _getHeaders();
-    final uri = search != null && search.isNotEmpty
-        ? Uri.parse('$baseUrl/contacts?search=$search')
-        : Uri.parse('$baseUrl/contacts');
+    try {
+      final options = await _getOptions();
+      final queryParams = search != null && search.isNotEmpty
+          ? {'search': search}
+          : null;
+      final response = await _dio.get(
+        '/contacts',
+        queryParameters: queryParams,
+        options: options,
+      );
 
-    final response = await http.get(uri, headers: headers);
+      await _handleResponse(response);
 
-    await _handleResponse(response);
-
-    if (response.statusCode == 200) {
-      final List<dynamic> data = jsonDecode(response.body);
-      return data.map((json) => Contact.fromJson(json)).toList();
-    } else {
-      throw Exception('Failed to fetch contacts');
+      if (response.statusCode == 200) {
+        final List<dynamic> data = response.data as List<dynamic>;
+        return data
+            .map((json) => Contact.fromJson(json as Map<String, dynamic>))
+            .toList();
+      } else {
+        throw Exception('Failed to fetch contacts');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<Contact> getContact(String contactId) async {
-    final headers = await _getHeaders();
-    final response = await http.get(
-      Uri.parse('$baseUrl/contacts/$contactId'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get('/contacts/$contactId', options: options);
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return Contact.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to fetch contact');
+      if (response.statusCode == 200) {
+        return Contact.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to fetch contact');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -601,59 +611,80 @@ class ApiService {
     String? avatarUrl,
     String? notes,
   }) async {
-    final headers = await _getHeaders();
-    final body = <String, dynamic>{};
-    if (name != null) body['name'] = name;
-    if (email != null) body['email'] = email;
-    if (phone != null) body['phone'] = phone;
-    if (avatarUrl != null) body['avatar_url'] = avatarUrl;
-    if (notes != null) body['notes'] = notes;
+    try {
+      final options = await _getOptions();
+      final body = <String, dynamic>{};
+      if (name != null) body['name'] = name;
+      if (email != null) body['email'] = email;
+      if (phone != null) body['phone'] = phone;
+      if (avatarUrl != null) body['avatar_url'] = avatarUrl;
+      if (notes != null) body['notes'] = notes;
 
-    final response = await http.put(
-      Uri.parse('$baseUrl/contacts/$contactId'),
-      headers: headers,
-      body: jsonEncode(body),
-    );
+      final response = await _dio.put(
+        '/contacts/$contactId',
+        data: body,
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return Contact.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to update contact');
+      if (response.statusCode == 200) {
+        return Contact.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to update contact');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<void> deleteContact(String contactId) async {
-    final headers = await _getHeaders();
-    final response = await http.delete(
-      Uri.parse('$baseUrl/contacts/$contactId'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.delete(
+        '/contacts/$contactId',
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode != 204) {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to delete contact');
+      if (response.statusCode != 204) {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to delete contact');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<ContactStats> getContactStats(String contactId) async {
-    final headers = await _getHeaders();
-    final response = await http.get(
-      Uri.parse('$baseUrl/contacts/$contactId/stats'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get(
+        '/contacts/$contactId/stats',
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return ContactStats.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to fetch contact stats');
+      if (response.statusCode == 200) {
+        return ContactStats.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to fetch contact stats');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -666,61 +697,78 @@ class ApiService {
     required String bankName,
     required String cardType,
   }) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/cards'),
-      headers: headers,
-      body: jsonEncode({
-        'card_number': cardNumber,
-        'card_holder_name': cardHolderName,
-        'expiry_date': expiryDate,
-        'cvv': cvv,
-        'bank_name': bankName,
-        'card_type': cardType,
-      }),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/cards',
+        data: {
+          'card_number': cardNumber,
+          'card_holder_name': cardHolderName,
+          'expiry_date': expiryDate,
+          'cvv': cvv,
+          'bank_name': bankName,
+          'card_type': cardType,
+        },
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 201) {
-      return BankCard.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to create bank card');
+      if (response.statusCode == 201) {
+        return BankCard.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to create bank card');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<List<BankCard>> getBankCards() async {
-    final headers = await _getHeaders();
-    final response = await http.get(
-      Uri.parse('$baseUrl/cards'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get('/cards', options: options);
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      final List<dynamic> data = jsonDecode(response.body);
-      return data.map((json) => BankCard.fromJson(json)).toList();
-    } else {
-      throw Exception('Failed to fetch bank cards');
+      if (response.statusCode == 200) {
+        final List<dynamic> data = response.data as List<dynamic>;
+        return data
+            .map((json) => BankCard.fromJson(json as Map<String, dynamic>))
+            .toList();
+      } else {
+        throw Exception('Failed to fetch bank cards');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<BankCard> getBankCard(String cardId) async {
-    final headers = await _getHeaders();
-    final response = await http.get(
-      Uri.parse('$baseUrl/cards/$cardId'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get('/cards/$cardId', options: options);
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return BankCard.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to fetch bank card');
+      if (response.statusCode == 200) {
+        return BankCard.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to fetch bank card');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -729,39 +777,50 @@ class ApiService {
     String? cardHolderName,
     String? bankName,
   }) async {
-    final headers = await _getHeaders();
-    final body = <String, dynamic>{};
-    if (cardHolderName != null) body['card_holder_name'] = cardHolderName;
-    if (bankName != null) body['bank_name'] = bankName;
+    try {
+      final options = await _getOptions();
+      final body = <String, dynamic>{};
+      if (cardHolderName != null) body['card_holder_name'] = cardHolderName;
+      if (bankName != null) body['bank_name'] = bankName;
 
-    final response = await http.put(
-      Uri.parse('$baseUrl/cards/$cardId'),
-      headers: headers,
-      body: jsonEncode(body),
-    );
+      final response = await _dio.put(
+        '/cards/$cardId',
+        data: body,
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return BankCard.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to update bank card');
+      if (response.statusCode == 200) {
+        return BankCard.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to update bank card');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<void> deleteBankCard(String cardId) async {
-    final headers = await _getHeaders();
-    final response = await http.delete(
-      Uri.parse('$baseUrl/cards/$cardId'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.delete('/cards/$cardId', options: options);
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode != 204) {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to delete bank card');
+      if (response.statusCode != 204) {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to delete bank card');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -770,32 +829,37 @@ class ApiService {
     required String otpCode,
   }) async {
     print('[API] verifyBankCard called: cardId=$cardId, otpCode=$otpCode');
-    final headers = await _getHeaders();
-    final url = '$baseUrl/cards/$cardId/verify';
-    print('[API] POST $url');
-    print('[API] Headers: ${headers.keys}');
-    print('[API] Body: {"otp_code": "$otpCode"}');
-
     try {
-      final response = await http.post(
-        Uri.parse(url),
-        headers: headers,
-        body: jsonEncode({'otp_code': otpCode}),
+      final options = await _getOptions();
+      print('[API] POST /cards/$cardId/verify');
+      print('[API] Headers: ${options.headers?.keys}');
+      print('[API] Body: {"otp_code": "$otpCode"}');
+
+      final response = await _dio.post(
+        '/cards/$cardId/verify',
+        data: {'otp_code': otpCode},
+        options: options,
       );
 
       print('[API] Response status: ${response.statusCode}');
-      print('[API] Response body: ${response.body}');
+      print('[API] Response body: ${response.data}');
 
       await _handleResponse(response);
 
       if (response.statusCode == 200) {
-        return BankCard.fromJson(jsonDecode(response.body));
+        return BankCard.fromJson(response.data as Map<String, dynamic>);
       } else {
-        final error = jsonDecode(response.body);
+        final error = response.data;
         final errorMsg = error['detail'] ?? 'Failed to verify bank card';
         print('[API] Error: $errorMsg');
         throw Exception(errorMsg);
       }
+    } on DioException catch (e) {
+      print('[API] Exception in verifyBankCard: $e');
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     } catch (e) {
       print('[API] Exception in verifyBankCard: $e');
       rethrow;
@@ -803,19 +867,26 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> resendCardVerificationOtp(String cardId) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/cards/$cardId/resend-otp'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/cards/$cardId/resend-otp',
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to resend OTP');
+      if (response.statusCode == 200) {
+        return response.data as Map<String, dynamic>;
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to resend OTP');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -824,24 +895,31 @@ class ApiService {
     required double amount,
     required String transactionPin,
   }) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/wallets/deposit-from-card'),
-      headers: headers,
-      body: jsonEncode({
-        'card_id': cardId,
-        'amount': amount,
-        'transaction_pin': transactionPin,
-      }),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/wallets/deposit-from-card',
+        data: {
+          'card_id': cardId,
+          'amount': amount,
+          'transaction_pin': transactionPin,
+        },
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return Wallet.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to deposit from card');
+      if (response.statusCode == 200) {
+        return Wallet.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to deposit from card');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -850,44 +928,57 @@ class ApiService {
     required double amount,
     required String transactionPin,
   }) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/wallets/withdraw-to-card'),
-      headers: headers,
-      body: jsonEncode({
-        'card_id': cardId,
-        'amount': amount,
-        'transaction_pin': transactionPin,
-      }),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/wallets/withdraw-to-card',
+        data: {
+          'card_id': cardId,
+          'amount': amount,
+          'transaction_pin': transactionPin,
+        },
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return Wallet.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to withdraw to card');
+      if (response.statusCode == 200) {
+        return Wallet.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to withdraw to card');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   // ==================== Bill Methods ====================
 
   Future<List<BillProvider>> getBillProviders() async {
-    final headers = await _getHeaders();
-    final response = await http.get(
-      Uri.parse('$baseUrl/bills/providers'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get('/bills/providers', options: options);
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      final List<dynamic> data = jsonDecode(response.body);
-      return data.map((json) => BillProvider.fromJson(json)).toList();
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to get bill providers');
+      if (response.statusCode == 200) {
+        final List<dynamic> data = response.data as List<dynamic>;
+        return data
+            .map((json) => BillProvider.fromJson(json as Map<String, dynamic>))
+            .toList();
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to get bill providers');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -895,23 +986,29 @@ class ApiService {
     required String providerId,
     required String customerCode,
   }) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/bills/check'),
-      headers: headers,
-      body: jsonEncode({
-        'provider_id': providerId,
-        'customer_code': customerCode,
-      }),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/bills/check',
+        data: {'provider_id': providerId, 'customer_code': customerCode},
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return BillCheckResponse.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to check bill');
+      if (response.statusCode == 200) {
+        return BillCheckResponse.fromJson(
+          response.data as Map<String, dynamic>,
+        );
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to check bill');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -923,45 +1020,58 @@ class ApiService {
     bool saveBill = false,
     String? alias,
   }) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/bills/pay'),
-      headers: headers,
-      body: jsonEncode({
-        'provider_id': providerId,
-        'customer_code': customerCode,
-        'amount': amount,
-        'transaction_pin': transactionPin,
-        'save_bill': saveBill,
-        if (alias != null) 'alias': alias,
-      }),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/bills/pay',
+        data: {
+          'provider_id': providerId,
+          'customer_code': customerCode,
+          'amount': amount,
+          'transaction_pin': transactionPin,
+          'save_bill': saveBill,
+          if (alias != null) 'alias': alias,
+        },
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to pay bill');
+      if (response.statusCode == 200) {
+        return response.data as Map<String, dynamic>;
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to pay bill');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<List<SavedBill>> getSavedBills() async {
-    final headers = await _getHeaders();
-    final response = await http.get(
-      Uri.parse('$baseUrl/bills/saved'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get('/bills/saved', options: options);
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      final List<dynamic> data = jsonDecode(response.body);
-      return data.map((json) => SavedBill.fromJson(json)).toList();
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to get saved bills');
+      if (response.statusCode == 200) {
+        final List<dynamic> data = response.data as List<dynamic>;
+        return data
+            .map((json) => SavedBill.fromJson(json as Map<String, dynamic>))
+            .toList();
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to get saved bills');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -971,25 +1081,32 @@ class ApiService {
     String? customerName,
     String? alias,
   }) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/bills/saved'),
-      headers: headers,
-      body: jsonEncode({
-        'provider_id': providerId,
-        'customer_code': customerCode,
-        if (customerName != null) 'customer_name': customerName,
-        if (alias != null) 'alias': alias,
-      }),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/bills/saved',
+        data: {
+          'provider_id': providerId,
+          'customer_code': customerCode,
+          if (customerName != null) 'customer_name': customerName,
+          if (alias != null) 'alias': alias,
+        },
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 201) {
-      return SavedBill.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to save bill');
+      if (response.statusCode == 201) {
+        return SavedBill.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to save bill');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -998,56 +1115,76 @@ class ApiService {
     String? customerName,
     String? alias,
   }) async {
-    final headers = await _getHeaders();
-    final response = await http.put(
-      Uri.parse('$baseUrl/bills/saved/$savedBillId'),
-      headers: headers,
-      body: jsonEncode({
-        if (customerName != null) 'customer_name': customerName,
-        if (alias != null) 'alias': alias,
-      }),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.put(
+        '/bills/saved/$savedBillId',
+        data: {
+          if (customerName != null) 'customer_name': customerName,
+          if (alias != null) 'alias': alias,
+        },
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return SavedBill.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to update saved bill');
+      if (response.statusCode == 200) {
+        return SavedBill.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to update saved bill');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<void> deleteSavedBill(String savedBillId) async {
-    final headers = await _getHeaders();
-    final response = await http.delete(
-      Uri.parse('$baseUrl/bills/saved/$savedBillId'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.delete(
+        '/bills/saved/$savedBillId',
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode != 204) {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to delete saved bill');
+      if (response.statusCode != 204) {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to delete saved bill');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<List<BillHistory>> getBillHistory() async {
-    final headers = await _getHeaders();
-    final response = await http.get(
-      Uri.parse('$baseUrl/bills/history'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get('/bills/history', options: options);
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      final List<dynamic> data = jsonDecode(response.body);
-      return data.map((json) => BillHistory.fromJson(json)).toList();
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to get bill history');
+      if (response.statusCode == 200) {
+        final List<dynamic> data = response.data as List<dynamic>;
+        return data
+            .map((json) => BillHistory.fromJson(json as Map<String, dynamic>))
+            .toList();
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to get bill history');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -1060,26 +1197,33 @@ class ApiService {
     int? month,
     required int year,
   }) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/budgets'),
-      headers: headers,
-      body: jsonEncode({
-        'category': category,
-        'amount': amount,
-        'period': period,
-        if (month != null) 'month': month,
-        'year': year,
-      }),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/budgets',
+        data: {
+          'category': category,
+          'amount': amount,
+          'period': period,
+          if (month != null) 'month': month,
+          'year': year,
+        },
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 201) {
-      return Budget.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to create budget');
+      if (response.statusCode == 201) {
+        return Budget.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to create budget');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -1088,59 +1232,80 @@ class ApiService {
     int? month,
     String? category,
   }) async {
-    final headers = await _getHeaders();
-    final queryParams = <String, String>{};
-    if (year != null) queryParams['year'] = year.toString();
-    if (month != null) queryParams['month'] = month.toString();
-    if (category != null) queryParams['category'] = category;
+    try {
+      final options = await _getOptions();
+      final queryParams = <String, dynamic>{};
+      if (year != null) queryParams['year'] = year.toString();
+      if (month != null) queryParams['month'] = month.toString();
+      if (category != null) queryParams['category'] = category;
 
-    final uri = Uri.parse(
-      '$baseUrl/budgets',
-    ).replace(queryParameters: queryParams);
-    final response = await http.get(uri, headers: headers);
+      final response = await _dio.get(
+        '/budgets',
+        queryParameters: queryParams,
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      final List<dynamic> data = jsonDecode(response.body);
-      return data.map((json) => Budget.fromJson(json)).toList();
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to get budgets');
+      if (response.statusCode == 200) {
+        final List<dynamic> data = response.data as List<dynamic>;
+        return data
+            .map((json) => Budget.fromJson(json as Map<String, dynamic>))
+            .toList();
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to get budgets');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<BudgetStatus> getBudget(String budgetId) async {
-    final headers = await _getHeaders();
-    final response = await http.get(
-      Uri.parse('$baseUrl/budgets/$budgetId'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get('/budgets/$budgetId', options: options);
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return BudgetStatus.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to get budget');
+      if (response.statusCode == 200) {
+        return BudgetStatus.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to get budget');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<BudgetStatus> getBudgetStatus(String budgetId) async {
-    final headers = await _getHeaders();
-    final response = await http.get(
-      Uri.parse('$baseUrl/budgets/$budgetId/status'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get(
+        '/budgets/$budgetId/status',
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return BudgetStatus.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to get budget status');
+      if (response.statusCode == 200) {
+        return BudgetStatus.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to get budget status');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -1152,42 +1317,56 @@ class ApiService {
     int? month,
     int? year,
   }) async {
-    final headers = await _getHeaders();
-    final body = <String, dynamic>{};
-    if (category != null) body['category'] = category;
-    if (amount != null) body['amount'] = amount;
-    if (period != null) body['period'] = period;
-    if (month != null) body['month'] = month;
-    if (year != null) body['year'] = year;
+    try {
+      final options = await _getOptions();
+      final body = <String, dynamic>{};
+      if (category != null) body['category'] = category;
+      if (amount != null) body['amount'] = amount;
+      if (period != null) body['period'] = period;
+      if (month != null) body['month'] = month;
+      if (year != null) body['year'] = year;
 
-    final response = await http.put(
-      Uri.parse('$baseUrl/budgets/$budgetId'),
-      headers: headers,
-      body: jsonEncode(body),
-    );
+      final response = await _dio.put(
+        '/budgets/$budgetId',
+        data: body,
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return Budget.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to update budget');
+      if (response.statusCode == 200) {
+        return Budget.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to update budget');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<void> deleteBudget(String budgetId) async {
-    final headers = await _getHeaders();
-    final response = await http.delete(
-      Uri.parse('$baseUrl/budgets/$budgetId'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.delete(
+        '/budgets/$budgetId',
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode != 204) {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to delete budget');
+      if (response.statusCode != 204) {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to delete budget');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -1199,63 +1378,88 @@ class ApiService {
     DateTime? deadline,
     double? autoDepositAmount,
   }) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/savings-goals'),
-      headers: headers,
-      body: jsonEncode({
-        'name': name,
-        'target_amount': targetAmount,
-        if (deadline != null)
-          'deadline': deadline.toIso8601String().split('T')[0],
-        if (autoDepositAmount != null) 'auto_deposit_amount': autoDepositAmount,
-      }),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/savings-goals',
+        data: {
+          'name': name,
+          'target_amount': targetAmount,
+          if (deadline != null)
+            'deadline': deadline.toIso8601String().split('T')[0],
+          if (autoDepositAmount != null)
+            'auto_deposit_amount': autoDepositAmount,
+        },
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 201) {
-      return SavingsGoal.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to create savings goal');
+      if (response.statusCode == 201) {
+        return SavingsGoal.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to create savings goal');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<List<SavingsGoal>> getSavingsGoals({
     bool includeCompleted = false,
   }) async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse('$baseUrl/savings-goals').replace(
-      queryParameters: {'include_completed': includeCompleted.toString()},
-    );
-    final response = await http.get(uri, headers: headers);
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get(
+        '/savings-goals',
+        queryParameters: {'include_completed': includeCompleted.toString()},
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      final List<dynamic> data = jsonDecode(response.body);
-      return data.map((json) => SavingsGoal.fromJson(json)).toList();
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to get savings goals');
+      if (response.statusCode == 200) {
+        final List<dynamic> data = response.data as List<dynamic>;
+        return data
+            .map((json) => SavingsGoal.fromJson(json as Map<String, dynamic>))
+            .toList();
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to get savings goals');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<SavingsGoal> getSavingsGoal(String goalId) async {
-    final headers = await _getHeaders();
-    final response = await http.get(
-      Uri.parse('$baseUrl/savings-goals/$goalId'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get(
+        '/savings-goals/$goalId',
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return SavingsGoal.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to get savings goal');
+      if (response.statusCode == 200) {
+        return SavingsGoal.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to get savings goal');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -1267,44 +1471,58 @@ class ApiService {
     double? autoDepositAmount,
     bool? isCompleted,
   }) async {
-    final headers = await _getHeaders();
-    final body = <String, dynamic>{};
-    if (name != null) body['name'] = name;
-    if (targetAmount != null) body['target_amount'] = targetAmount;
-    if (deadline != null)
-      body['deadline'] = deadline.toIso8601String().split('T')[0];
-    if (autoDepositAmount != null)
-      body['auto_deposit_amount'] = autoDepositAmount;
-    if (isCompleted != null) body['is_completed'] = isCompleted;
+    try {
+      final options = await _getOptions();
+      final body = <String, dynamic>{};
+      if (name != null) body['name'] = name;
+      if (targetAmount != null) body['target_amount'] = targetAmount;
+      if (deadline != null)
+        body['deadline'] = deadline.toIso8601String().split('T')[0];
+      if (autoDepositAmount != null)
+        body['auto_deposit_amount'] = autoDepositAmount;
+      if (isCompleted != null) body['is_completed'] = isCompleted;
 
-    final response = await http.put(
-      Uri.parse('$baseUrl/savings-goals/$goalId'),
-      headers: headers,
-      body: jsonEncode(body),
-    );
+      final response = await _dio.put(
+        '/savings-goals/$goalId',
+        data: body,
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return SavingsGoal.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to update savings goal');
+      if (response.statusCode == 200) {
+        return SavingsGoal.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to update savings goal');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<void> deleteSavingsGoal(String goalId) async {
-    final headers = await _getHeaders();
-    final response = await http.delete(
-      Uri.parse('$baseUrl/savings-goals/$goalId'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.delete(
+        '/savings-goals/$goalId',
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode != 204) {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to delete savings goal');
+      if (response.statusCode != 204) {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to delete savings goal');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -1312,20 +1530,27 @@ class ApiService {
     required String goalId,
     required double amount,
   }) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/savings-goals/$goalId/deposit'),
-      headers: headers,
-      body: jsonEncode({'amount': amount}),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/savings-goals/$goalId/deposit',
+        data: {'amount': amount},
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return SavingsGoal.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to deposit to savings goal');
+      if (response.statusCode == 200) {
+        return SavingsGoal.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to deposit to savings goal');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -1333,22 +1558,29 @@ class ApiService {
     required String goalId,
     required double amount,
   }) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/savings-goals/$goalId/withdraw'),
-      headers: headers,
-      body: jsonEncode({'amount': amount}),
-    );
-
-    await _handleResponse(response);
-
-    if (response.statusCode == 200) {
-      return SavingsGoal.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(
-        error['detail'] ?? 'Failed to withdraw from savings goal',
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/savings-goals/$goalId/withdraw',
+        data: {'amount': amount},
+        options: options,
       );
+
+      await _handleResponse(response);
+
+      if (response.statusCode == 200) {
+        return SavingsGoal.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(
+          error['detail'] ?? 'Failed to withdraw from savings goal',
+        );
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -1360,41 +1592,59 @@ class ApiService {
     int? month,
     String? category,
   }) async {
-    final headers = await _getHeaders();
-    final queryParams = <String, String>{'period': period};
-    if (year != null) queryParams['year'] = year.toString();
-    if (month != null) queryParams['month'] = month.toString();
-    if (category != null) queryParams['category'] = category;
+    try {
+      final options = await _getOptions();
+      final queryParams = <String, dynamic>{'period': period};
+      if (year != null) queryParams['year'] = year.toString();
+      if (month != null) queryParams['month'] = month.toString();
+      if (category != null) queryParams['category'] = category;
 
-    final uri = Uri.parse(
-      '$baseUrl/analytics/spending',
-    ).replace(queryParameters: queryParams);
-    final response = await http.get(uri, headers: headers);
+      final response = await _dio.get(
+        '/analytics/spending',
+        queryParameters: queryParams,
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return SpendingAnalytics.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to get spending analytics');
+      if (response.statusCode == 200) {
+        return SpendingAnalytics.fromJson(
+          response.data as Map<String, dynamic>,
+        );
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to get spending analytics');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<SpendingTrends> getSpendingTrends({String period = 'month'}) async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse(
-      '$baseUrl/analytics/trends',
-    ).replace(queryParameters: {'period': period});
-    final response = await http.get(uri, headers: headers);
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get(
+        '/analytics/trends',
+        queryParameters: {'period': period},
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return SpendingTrends.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to get spending trends');
+      if (response.statusCode == 200) {
+        return SpendingTrends.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to get spending trends');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -1404,99 +1654,160 @@ class ApiService {
     required String deviceToken,
     required String deviceType, // IOS, ANDROID, WEB
   }) async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse('$baseUrl/notifications/register');
-    final response = await http.post(
-      uri,
-      headers: headers,
-      body: jsonEncode({
-        'device_token': deviceToken,
-        'device_type': deviceType,
-      }),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/notifications/register',
+        data: {'device_token': deviceToken, 'device_type': deviceType},
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
+    }
   }
 
   Future<List<Notification>> getNotifications({
     bool unreadOnly = false,
     int limit = 50,
   }) async {
-    final headers = await _getHeaders();
-    final queryParams = <String, String>{
-      'unread_only': unreadOnly.toString(),
-      'limit': limit.toString(),
-    };
-    final uri = Uri.parse(
-      '$baseUrl/notifications',
-    ).replace(queryParameters: queryParams);
-    final response = await http.get(uri, headers: headers);
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get(
+        '/notifications',
+        queryParameters: {
+          'unread_only': unreadOnly.toString(),
+          'limit': limit.toString(),
+        },
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      final List<dynamic> data = jsonDecode(response.body);
-      return data.map((json) => Notification.fromJson(json)).toList();
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to get notifications');
+      if (response.statusCode == 200) {
+        final List<dynamic> data = response.data as List<dynamic>;
+        return data
+            .map((json) => Notification.fromJson(json as Map<String, dynamic>))
+            .toList();
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to get notifications');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<int> getUnreadNotificationCount() async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse('$baseUrl/notifications/unread-count');
-    final response = await http.get(uri, headers: headers);
-
-    await _handleResponse(response);
-
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      return data['unread_count'] ?? 0;
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(
-        error['detail'] ?? 'Failed to get unread notification count',
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get(
+        '/notifications/unread-count',
+        options: options,
       );
+
+      await _handleResponse(response);
+
+      if (response.statusCode == 200) {
+        final data = response.data as Map<String, dynamic>;
+        return data['unread_count'] ?? 0;
+      } else {
+        final error = response.data;
+        throw Exception(
+          error['detail'] ?? 'Failed to get unread notification count',
+        );
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<void> markNotificationRead(String notificationId) async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse('$baseUrl/notifications/$notificationId/read');
-    final response = await http.put(uri, headers: headers);
+    try {
+      final options = await _getOptions();
+      final response = await _dio.put(
+        '/notifications/$notificationId/read',
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
+    }
   }
 
   Future<void> markAllNotificationsRead() async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse('$baseUrl/notifications/read-all');
-    final response = await http.put(uri, headers: headers);
+    try {
+      final options = await _getOptions();
+      final response = await _dio.put(
+        '/notifications/read-all',
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
+    }
   }
 
   Future<void> deleteNotification(String notificationId) async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse('$baseUrl/notifications/$notificationId');
-    final response = await http.delete(uri, headers: headers);
+    try {
+      final options = await _getOptions();
+      final response = await _dio.delete(
+        '/notifications/$notificationId',
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
+    }
   }
 
   Future<NotificationSettings> getNotificationSettings() async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse('$baseUrl/notifications/settings');
-    final response = await http.get(uri, headers: headers);
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get(
+        '/notifications/settings',
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return NotificationSettings.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to get notification settings');
+      if (response.statusCode == 200) {
+        return NotificationSettings.fromJson(
+          response.data as Map<String, dynamic>,
+        );
+      } else {
+        final error = response.data;
+        throw Exception(
+          error['detail'] ?? 'Failed to get notification settings',
+        );
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -1506,37 +1817,46 @@ class ApiService {
     bool? enableSecurityNotifications,
     bool? enableAlertNotifications,
   }) async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse('$baseUrl/notifications/settings');
-    final body = <String, dynamic>{};
-    if (enableTransactionNotifications != null) {
-      body['enable_transaction_notifications'] = enableTransactionNotifications;
-    }
-    if (enablePromotionNotifications != null) {
-      body['enable_promotion_notifications'] = enablePromotionNotifications;
-    }
-    if (enableSecurityNotifications != null) {
-      body['enable_security_notifications'] = enableSecurityNotifications;
-    }
-    if (enableAlertNotifications != null) {
-      body['enable_alert_notifications'] = enableAlertNotifications;
-    }
+    try {
+      final options = await _getOptions();
+      final body = <String, dynamic>{};
+      if (enableTransactionNotifications != null) {
+        body['enable_transaction_notifications'] =
+            enableTransactionNotifications;
+      }
+      if (enablePromotionNotifications != null) {
+        body['enable_promotion_notifications'] = enablePromotionNotifications;
+      }
+      if (enableSecurityNotifications != null) {
+        body['enable_security_notifications'] = enableSecurityNotifications;
+      }
+      if (enableAlertNotifications != null) {
+        body['enable_alert_notifications'] = enableAlertNotifications;
+      }
 
-    final response = await http.put(
-      uri,
-      headers: headers,
-      body: jsonEncode(body),
-    );
-
-    await _handleResponse(response);
-
-    if (response.statusCode == 200) {
-      return NotificationSettings.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(
-        error['detail'] ?? 'Failed to update notification settings',
+      final response = await _dio.put(
+        '/notifications/settings',
+        data: body,
+        options: options,
       );
+
+      await _handleResponse(response);
+
+      if (response.statusCode == 200) {
+        return NotificationSettings.fromJson(
+          response.data as Map<String, dynamic>,
+        );
+      } else {
+        final error = response.data;
+        throw Exception(
+          error['detail'] ?? 'Failed to update notification settings',
+        );
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -1546,79 +1866,121 @@ class ApiService {
     bool unreadOnly = false,
     int limit = 50,
   }) async {
-    final headers = await _getHeaders();
-    final queryParams = <String, String>{
-      'unread_only': unreadOnly.toString(),
-      'limit': limit.toString(),
-    };
-    final uri = Uri.parse(
-      '$baseUrl/alerts',
-    ).replace(queryParameters: queryParams);
-    final response = await http.get(uri, headers: headers);
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get(
+        '/alerts',
+        queryParameters: {
+          'unread_only': unreadOnly.toString(),
+          'limit': limit.toString(),
+        },
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      final List<dynamic> data = jsonDecode(response.body);
-      return data.map((json) => Alert.fromJson(json)).toList();
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to get alerts');
+      if (response.statusCode == 200) {
+        final List<dynamic> data = response.data as List<dynamic>;
+        return data
+            .map((json) => Alert.fromJson(json as Map<String, dynamic>))
+            .toList();
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to get alerts');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<int> getUnreadAlertCount() async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse('$baseUrl/alerts/unread-count');
-    final response = await http.get(uri, headers: headers);
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get('/alerts/unread-count', options: options);
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      return data['unread_count'] ?? 0;
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to get unread alert count');
+      if (response.statusCode == 200) {
+        final data = response.data as Map<String, dynamic>;
+        return data['unread_count'] ?? 0;
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to get unread alert count');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<void> markAlertRead(String alertId) async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse('$baseUrl/alerts/$alertId/read');
-    final response = await http.put(uri, headers: headers);
+    try {
+      final options = await _getOptions();
+      final response = await _dio.put(
+        '/alerts/$alertId/read',
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
+    }
   }
 
   Future<void> markAllAlertsRead() async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse('$baseUrl/alerts/read-all');
-    final response = await http.put(uri, headers: headers);
+    try {
+      final options = await _getOptions();
+      final response = await _dio.put('/alerts/read-all', options: options);
 
-    await _handleResponse(response);
+      await _handleResponse(response);
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
+    }
   }
 
   Future<void> deleteAlert(String alertId) async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse('$baseUrl/alerts/$alertId');
-    final response = await http.delete(uri, headers: headers);
+    try {
+      final options = await _getOptions();
+      final response = await _dio.delete('/alerts/$alertId', options: options);
 
-    await _handleResponse(response);
+      await _handleResponse(response);
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
+    }
   }
 
   Future<AlertSettings> getAlertSettings() async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse('$baseUrl/alerts/settings');
-    final response = await http.get(uri, headers: headers);
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get('/alerts/settings', options: options);
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return AlertSettings.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to get alert settings');
+      if (response.statusCode == 200) {
+        return AlertSettings.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to get alert settings');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -1631,64 +1993,76 @@ class ApiService {
     bool? enableBudgetAlert,
     bool? enableNewDeviceAlert,
   }) async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse('$baseUrl/alerts/settings');
-    final body = <String, dynamic>{};
-    if (largeTransactionThreshold != null) {
-      body['large_transaction_threshold'] = largeTransactionThreshold;
-    }
-    if (lowBalanceThreshold != null) {
-      body['low_balance_threshold'] = lowBalanceThreshold;
-    }
-    if (budgetWarningPercentage != null) {
-      body['budget_warning_percentage'] = budgetWarningPercentage;
-    }
-    if (enableLargeTransactionAlert != null) {
-      body['enable_large_transaction_alert'] = enableLargeTransactionAlert;
-    }
-    if (enableLowBalanceAlert != null) {
-      body['enable_low_balance_alert'] = enableLowBalanceAlert;
-    }
-    if (enableBudgetAlert != null) {
-      body['enable_budget_alert'] = enableBudgetAlert;
-    }
-    if (enableNewDeviceAlert != null) {
-      body['enable_new_device_alert'] = enableNewDeviceAlert;
-    }
+    try {
+      final options = await _getOptions();
+      final body = <String, dynamic>{};
+      if (largeTransactionThreshold != null) {
+        body['large_transaction_threshold'] = largeTransactionThreshold;
+      }
+      if (lowBalanceThreshold != null) {
+        body['low_balance_threshold'] = lowBalanceThreshold;
+      }
+      if (budgetWarningPercentage != null) {
+        body['budget_warning_percentage'] = budgetWarningPercentage;
+      }
+      if (enableLargeTransactionAlert != null) {
+        body['enable_large_transaction_alert'] = enableLargeTransactionAlert;
+      }
+      if (enableLowBalanceAlert != null) {
+        body['enable_low_balance_alert'] = enableLowBalanceAlert;
+      }
+      if (enableBudgetAlert != null) {
+        body['enable_budget_alert'] = enableBudgetAlert;
+      }
+      if (enableNewDeviceAlert != null) {
+        body['enable_new_device_alert'] = enableNewDeviceAlert;
+      }
 
-    final response = await http.put(
-      uri,
-      headers: headers,
-      body: jsonEncode(body),
-    );
+      final response = await _dio.put(
+        '/alerts/settings',
+        data: body,
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return AlertSettings.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to update alert settings');
+      if (response.statusCode == 200) {
+        return AlertSettings.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to update alert settings');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   // ==================== Device Methods ====================
 
   Future<List<UserDevice>> getDevices() async {
-    final headers = await _getHeaders();
-    final response = await http.get(
-      Uri.parse('$baseUrl/devices'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.get('/devices', options: options);
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      final List<dynamic> data = jsonDecode(response.body);
-      return data.map((json) => UserDevice.fromJson(json)).toList();
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to get devices');
+      if (response.statusCode == 200) {
+        final List<dynamic> data = response.data as List<dynamic>;
+        return data
+            .map((json) => UserDevice.fromJson(json as Map<String, dynamic>))
+            .toList();
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to get devices');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -1699,26 +2073,33 @@ class ApiService {
     String? ipAddress,
     String? userAgent,
   }) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/devices'),
-      headers: headers,
-      body: jsonEncode({
-        'device_name': deviceName,
-        'device_type': deviceType,
-        if (deviceToken != null) 'device_token': deviceToken,
-        if (ipAddress != null) 'ip_address': ipAddress,
-        if (userAgent != null) 'user_agent': userAgent,
-      }),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/devices',
+        data: {
+          'device_name': deviceName,
+          'device_type': deviceType,
+          if (deviceToken != null) 'device_token': deviceToken,
+          if (ipAddress != null) 'ip_address': ipAddress,
+          if (userAgent != null) 'user_agent': userAgent,
+        },
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 201) {
-      return UserDevice.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to create device');
+      if (response.statusCode == 201) {
+        return UserDevice.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to create device');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -1726,35 +2107,49 @@ class ApiService {
     required String deviceId,
     required String deviceName,
   }) async {
-    final headers = await _getHeaders();
-    final response = await http.post(
-      Uri.parse('$baseUrl/devices/$deviceId/rename'),
-      headers: headers,
-      body: jsonEncode({'device_name': deviceName}),
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.post(
+        '/devices/$deviceId/rename',
+        data: {'device_name': deviceName},
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode == 200) {
-      return UserDevice.fromJson(jsonDecode(response.body));
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to rename device');
+      if (response.statusCode == 200) {
+        return UserDevice.fromJson(response.data as Map<String, dynamic>);
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to rename device');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
   Future<void> deleteDevice(String deviceId) async {
-    final headers = await _getHeaders();
-    final response = await http.delete(
-      Uri.parse('$baseUrl/devices/$deviceId'),
-      headers: headers,
-    );
+    try {
+      final options = await _getOptions();
+      final response = await _dio.delete(
+        '/devices/$deviceId',
+        options: options,
+      );
 
-    await _handleResponse(response);
+      await _handleResponse(response);
 
-    if (response.statusCode != 204) {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to delete device');
+      if (response.statusCode != 204) {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to delete device');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 
@@ -1765,29 +2160,40 @@ class ApiService {
     int offset = 0,
     String? actionType,
   }) async {
-    final headers = await _getHeaders();
-    final queryParams = <String, String>{
-      'limit': limit.toString(),
-      'offset': offset.toString(),
-    };
-    if (actionType != null) {
-      queryParams['action_type'] = actionType;
-    }
+    try {
+      final options = await _getOptions();
+      final queryParams = <String, dynamic>{
+        'limit': limit.toString(),
+        'offset': offset.toString(),
+      };
+      if (actionType != null) {
+        queryParams['action_type'] = actionType;
+      }
 
-    final uri = Uri.parse(
-      '$baseUrl/security/history',
-    ).replace(queryParameters: queryParams);
+      final response = await _dio.get(
+        '/security/history',
+        queryParameters: queryParams,
+        options: options,
+      );
 
-    final response = await http.get(uri, headers: headers);
+      await _handleResponse(response);
 
-    await _handleResponse(response);
-
-    if (response.statusCode == 200) {
-      final List<dynamic> data = jsonDecode(response.body);
-      return data.map((json) => SecurityHistory.fromJson(json)).toList();
-    } else {
-      final error = jsonDecode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to get security history');
+      if (response.statusCode == 200) {
+        final List<dynamic> data = response.data as List<dynamic>;
+        return data
+            .map(
+              (json) => SecurityHistory.fromJson(json as Map<String, dynamic>),
+            )
+            .toList();
+      } else {
+        final error = response.data;
+        throw Exception(error['detail'] ?? 'Failed to get security history');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await _handleResponse(e.response!);
+      }
+      throw _handleDioError(e);
     }
   }
 }

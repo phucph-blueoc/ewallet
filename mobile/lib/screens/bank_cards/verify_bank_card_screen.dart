@@ -6,6 +6,7 @@ import '../../providers/providers.dart';
 import '../../models/models.dart';
 import '../../widgets/tech_background.dart';
 import '../../widgets/tech_card.dart';
+import '../../utils/logger.dart';
 
 class VerifyBankCardScreen extends StatefulWidget {
   final BankCard card;
@@ -50,32 +51,32 @@ class _VerifyBankCardScreenState extends State<VerifyBankCardScreen> {
   }
 
   Future<void> _verifyCard() async {
-    print('[VerifyCard] Button pressed');
-    print('[VerifyCard] OTP: ${_otpController.text}');
-    print('[VerifyCard] Card ID: ${widget.card.id}');
+    Logger.debug('[VerifyCard] Button pressed');
+    Logger.sensitive('[VerifyCard] OTP: ${_otpController.text}');
+    Logger.debug('[VerifyCard] Card ID: ${widget.card.id}');
     
     if (!_formKey.currentState!.validate()) {
-      print('[VerifyCard] Form validation failed');
+      Logger.debug('[VerifyCard] Form validation failed');
       return;
     }
     
-    print('[VerifyCard] Form validation passed, calling API...');
+    Logger.debug('[VerifyCard] Form validation passed, calling API...');
     setState(() => _isLoading = true);
     
     try {
-      print('[VerifyCard] Calling verifyBankCard API...');
+      Logger.debug('[VerifyCard] Calling verifyBankCard API...');
       await context.read<BankCardProvider>().verifyBankCard(
             cardId: widget.card.id,
             otpCode: _otpController.text,
           );
-      print('[VerifyCard] API call successful');
+      Logger.info('[VerifyCard] API call successful');
 
       // Reload cards list
-      print('[VerifyCard] Reloading bank cards...');
+      Logger.debug('[VerifyCard] Reloading bank cards...');
       await context.read<BankCardProvider>().loadBankCards();
 
       if (mounted) {
-        print('[VerifyCard] Showing success message');
+        Logger.debug('[VerifyCard] Showing success message');
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Xác thực thẻ thành công!'),
@@ -85,8 +86,7 @@ class _VerifyBankCardScreenState extends State<VerifyBankCardScreen> {
         Navigator.pop(context, true);
       }
     } catch (e, stackTrace) {
-      print('[VerifyCard] Error occurred: $e');
-      print('[VerifyCard] Stack trace: $stackTrace');
+      Logger.error('[VerifyCard] Error occurred', error: e, stackTrace: stackTrace);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

@@ -8,7 +8,8 @@ plugins {
 
 android {
     namespace = "com.ewallet.ewallet_app"
-    compileSdk = flutter.compileSdkVersion
+    // Ensure compileSdk is at least 31 for lStar attribute support
+    compileSdk = if (flutter.compileSdkVersion >= 31) flutter.compileSdkVersion else 31
     ndkVersion = flutter.ndkVersion
     ndkVersion = "27.0.12077973"
     compileOptions {
@@ -37,6 +38,27 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            
+            // Enable code obfuscation and resource shrinking
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+            
+            // Remove debug symbols in release builds
+            // This is handled by Flutter's --split-debug-info flag
+            // but we ensure no debug info is included in the APK
+            ndk {
+                debugSymbolLevel = "NONE"
+            }
+        }
+        debug {
+            // Keep debug symbols for debug builds
+            ndk {
+                debugSymbolLevel = "FULL"
+            }
         }
     }
 }

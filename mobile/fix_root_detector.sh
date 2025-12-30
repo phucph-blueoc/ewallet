@@ -32,6 +32,15 @@ if [ -f "$ROOT_DETECTOR_BUILD_GRADLE" ]; then
         # Add compileOptions and kotlinOptions before lintOptions
         sed -i '/lintOptions {/i\    compileOptions {\n        sourceCompatibility JavaVersion.VERSION_1_8\n        targetCompatibility JavaVersion.VERSION_1_8\n    }\n    kotlinOptions {\n        jvmTarget = '\''1.8'\''\n    }' "$ROOT_DETECTOR_BUILD_GRADLE"
     fi
+    
+    # Fix compileSdkVersion to 31 for lStar attribute support
+    if grep -q "compileSdkVersion" "$ROOT_DETECTOR_BUILD_GRADLE"; then
+        echo "  - Updating compileSdkVersion to 31..."
+        sed -i 's/compileSdkVersion [0-9]*/compileSdkVersion 31/g' "$ROOT_DETECTOR_BUILD_GRADLE"
+    else
+        echo "  - Adding compileSdkVersion 31..."
+        sed -i "/^android {/a\    compileSdkVersion 31" "$ROOT_DETECTOR_BUILD_GRADLE"
+    fi
 else
     echo "root_detector build.gradle not found at $ROOT_DETECTOR_BUILD_GRADLE"
 fi

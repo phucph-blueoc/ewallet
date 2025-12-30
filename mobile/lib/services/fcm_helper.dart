@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'fcm_service.dart';
 import '../providers/providers.dart';
 import 'api_service.dart';
+import '../utils/logger.dart';
 
 /// Register FCM token if available and user is authenticated
 Future<void> ensureFCMTokenRegistered(BuildContext? context) async {
@@ -13,7 +14,7 @@ Future<void> ensureFCMTokenRegistered(BuildContext? context) async {
     final savedToken = prefs.getString('fcm_token');
     
     if (savedToken == null || savedToken.isEmpty) {
-      debugPrint('No saved FCM token found');
+      Logger.debug('No saved FCM token found');
       return;
     }
     
@@ -24,7 +25,7 @@ Future<void> ensureFCMTokenRegistered(BuildContext? context) async {
         final authProvider = Provider.of<AuthProvider>(context, listen: false);
         isAuthenticated = authProvider.isAuthenticated;
       } catch (e) {
-        debugPrint('Could not check auth status: $e');
+        Logger.warning('Could not check auth status', error: e);
       }
     }
     
@@ -45,13 +46,13 @@ Future<void> ensureFCMTokenRegistered(BuildContext? context) async {
           deviceToken: savedToken,
           deviceType: deviceType,
         );
-        debugPrint('Successfully registered FCM token after login');
+        Logger.info('Successfully registered FCM token after login');
       } catch (e) {
-        debugPrint('Failed to register FCM token: $e');
+        Logger.error('Failed to register FCM token', error: e);
       }
     }
   } catch (e) {
-    debugPrint('Error ensuring FCM token registration: $e');
+    Logger.error('Error ensuring FCM token registration', error: e);
   }
 }
 

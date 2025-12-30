@@ -7,6 +7,7 @@ import 'providers/providers.dart';
 import 'screens/splash_screen.dart';
 import 'screens/security/security_check_screen.dart';
 import 'widgets/tech_background.dart';
+import 'utils/logger.dart';
 
 // Global navigator key for navigation from anywhere
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -17,14 +18,13 @@ void main() async {
   // Initialize Firebase
   try {
     await Firebase.initializeApp();
-    debugPrint('Firebase initialized successfully');
+    Logger.info('Firebase initialized successfully');
 
     // Verify Firebase is initialized
     final app = Firebase.app();
-    debugPrint('Firebase app name: ${app.name}');
+    Logger.debug('Firebase app name: ${app.name}');
   } catch (e, stackTrace) {
-    debugPrint('Error initializing Firebase: $e');
-    debugPrint('Stack trace: $stackTrace');
+    Logger.error('Error initializing Firebase', error: e, stackTrace: stackTrace);
     // Continue even if Firebase fails - FCM service will handle it
     // This allows the app to run even if Firebase config is missing
   }

@@ -16,3 +16,8 @@ msal
 requests
 psycopg2-binary  # PostgreSQL driver
 firebase-admin  # Firebase Admin SDK for push notifications
+
+# Testing dependencies
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+httpx>=0.24.0  # For async HTTP testing with FastAPI TestClient
